@@ -1,4 +1,5 @@
 import { DiceStage } from './engine.mjs';
+import { DiceStage3D, webglAvailable } from './engine3d.mjs';
 import { LANDINGS, MATERIALS, PRESETS, SOUNDS, STYLES, TRAILS, appearanceOf } from './presets.mjs';
 
 const MODULE_ID = 'fu-dice';
@@ -71,7 +72,8 @@ export class DiceConfig extends ApplicationV2 {
 		const root = this.element;
 		const cv = root.querySelector('.fud-stage canvas');
 		this.stage?.clear();
-		this.stage = new DiceStage({ canvas: cv, settings: () => ({ size: 1, speed: Number(game.settings.get(MODULE_ID, 'speed')) || 1, volume: Number(game.settings.get(MODULE_ID, 'volume')) || 0, reduced: game.settings.get(MODULE_ID, 'reduced') }) });
+		const three = game.settings.get(MODULE_ID, 'renderer') !== '2d' && webglAvailable();
+		this.stage = new (three ? DiceStage3D : DiceStage)({ canvas: cv, settings: () => ({ size: 1, speed: Number(game.settings.get(MODULE_ID, 'speed')) || 1, volume: Number(game.settings.get(MODULE_ID, 'volume')) || 0, reduced: game.settings.get(MODULE_ID, 'reduced') }) });
 		root.querySelectorAll('[data-k]').forEach((el) =>
 			el.addEventListener('change', () => {
 				this.look[el.dataset.k] = el.value;

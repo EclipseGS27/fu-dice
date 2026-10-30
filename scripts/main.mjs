@@ -1,4 +1,5 @@
 import { DiceStage } from './engine.mjs';
+import { DiceStage3D, webglAvailable } from './engine3d.mjs';
 import { DiceConfig, myAppearance } from './config.mjs';
 import { appearanceOf } from './presets.mjs';
 
@@ -16,9 +17,22 @@ const get = (k) => {
 	}
 };
 
-const stage = new DiceStage({
-	settings: () => ({ size: get('size'), speed: get('speed'), reduced: get('reduced'), volume: volume() }),
-});
+const stageSettings = () => ({ size: get('size'), speed: get('speed'), reduced: get('reduced'), volume: volume() });
+const stages = {};
+/** 3D dice (the default) or the lighter 2D ones; 2D when this browser has no WebGL */
+export function useStage() {
+	const mode = get('renderer') === '2d' || !webglAvailable() ? '2d' : '3d';
+	if (!stages[mode]) {
+		try {
+			stages[mode] = mode === '3d' ? new DiceStage3D({ settings: stageSettings }) : new DiceStage({ settings: stageSettings });
+		} catch (err) {
+			console.warn(`${MODULE_ID} | 3D dice unavailable, using 2D`, err);
+			stages[mode] = stages['2d'] ??= new DiceStage({ settings: stageSettings });
+		}
+	}
+	return stages[mode];
+}
+const stage = { roll: (...a) => useStage().roll(...a), clear: () => Object.values(stages).forEach((s) => s.clear()) };
 
 /** The module's volume, times Foundry's interface volume */
 function volume() {
@@ -37,6 +51,7 @@ function volume() {
 
 Hooks.once('init', () => {
 	const reg = (key, data) => game.settings.register(MODULE_ID, key, { config: true, scope: 'client', ...data });
+	reg('renderer', { name: 'Dice', hint: '3D: real dice with physics. 2D: flat dice, lighter on older computers.', type: String, choices: { '3d': '3D', '2d': '2D (lighter)' }, default: '3d', onChange: () => stage.clear() });
 	reg('enabled', { name: 'Show dice', hint: 'Throw dice across the screen when a roll is posted to chat.', type: Boolean, default: true, onChange: (v) => !v && stage.clear() });
 	reg('showOthers', { name: 'Whose rolls', type: String, choices: { all: 'Everyone’s', mine: 'Only mine', none: 'None' }, default: 'all' });
 	reg('ownStyles', { name: 'Each player’s own dice', hint: 'Show other players’ rolls in the dice they picked. Off: every roll uses yours.', type: Boolean, default: true });

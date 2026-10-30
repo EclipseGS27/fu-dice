@@ -1,7 +1,7 @@
 {
   "id": "fu-dice",
   "title": "Fabula Ultima Dice",
-  "description": "JRPG dice for every roll: pixel-art or smooth dice thrown across the screen, bouncing and tumbling onto their result, with trails, landing effects and synthesized sounds. Each player picks their own look from presets (Battle UI, 8-bit, and one for each Final Fantasy era from VI to XVI) or makes their own, with a live preview. Chat results wait until the dice land, Project FU criticals and fumbles get a flourish, and it all runs on one light 2D canvas.",
+  "description": "JRPG dice for every roll: real 3D dice (pixel-art or smooth) thrown across the screen with physics, landing on the actual result, with trails, landing effects and synthesized sounds. Each player picks their own look from presets (Battle UI, 8-bit, and one for each Final Fantasy era from VI to XVI) or makes their own, with a live preview. Chat results wait until the dice land, Project FU criticals and fumbles get a flourish, and lighter 2D dice are there for older computers.",
   "version": "1.0.0",
   "authors": [
     {
