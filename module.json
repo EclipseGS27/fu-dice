@@ -1,0 +1,25 @@
+{
+  "id": "fu-dice",
+  "title": "Fabula Ultima Dice",
+  "description": "JRPG dice for every roll: pixel-art or smooth dice thrown across the screen, bouncing and tumbling onto their result, with trails, landing effects and synthesized sounds. Each player picks their own look from presets (Battle UI, 8-bit, and one for each Final Fantasy era from VI to XVI) or makes their own, with a live preview. Chat results wait until the dice land, Project FU criticals and fumbles get a flourish, and it all runs on one light 2D canvas.",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "name": "George Sowidan"
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13"
+  },
+  "esmodules": [
+    "scripts/main.mjs"
+  ],
+  "styles": [
+    "styles/dice.css"
+  ],
+  "url": "https://github.com/EclipseGS27/fu-dice",
+  "manifest": "https://github.com/EclipseGS27/fu-dice/releases/latest/download/module.json",
+  "download": "https://github.com/EclipseGS27/fu-dice/releases/download/v1.0.0/fu-dice.zip",
+  "bugs": "https://github.com/EclipseGS27/fu-dice/issues"
+}
