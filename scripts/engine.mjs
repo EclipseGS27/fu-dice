@@ -1,17 +1,19 @@
 import { appearanceOf } from './presets.mjs';
 import { diceSound } from './sound.mjs';
+import { surface } from './textures.mjs';
+import { drawPixelTextAt } from './pixelfont.mjs';
 
 /**
  * The dice tray: one canvas over the screen (or a given canvas, for the settings preview). Dice are thrown in from
  * an edge, fly in an arc, bounce, knock into each other, tumble through faces, and settle upright on their
- * result. Pixel dice are drawn at low resolution with hard edges and a bitmap font; smooth dice anti-aliased with
- * gradients and glow. It only animates while dice are moving.
+ * result. Pixel dice are drawn at low resolution with hard edges and a dark outline, and their numbers upright
+ * in a 5x7 pixel font on the same grid; smooth dice anti-aliased with gradients and glow. Both wear the look's
+ * surface texture. It only animates while dice are moving.
  */
 
 const TAU = Math.PI * 2;
 const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const PIX = 4; // screen pixels per art pixel for pixel dice
 
 /* ------------------------------------------------------------------ */
 /*  Colors                                                             */
@@ -55,31 +57,6 @@ function facetLines(shape) {
 	// d20: a triangle face in the middle, its corners to the outline
 	const tri = [[0, -0.62], [0.56, 0.36], [-0.56, 0.36]];
 	return [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]], [tri[0], o[0]], [tri[1], o[2]], [tri[1], o[3]], [tri[2], o[3]], [tri[2], o[4]], [tri[0], o[5]], [tri[0], o[1]], [tri[1], o[1]], [tri[2], o[5]]];
-}
-
-/* ------------------------------------------------------------------ */
-/*  A 3x5 bitmap font for pixel dice                                   */
-/* ------------------------------------------------------------------ */
-
-export const GLYPH = {
-	0: '111101101101111', 1: '010110010010111', 2: '111001111100111', 3: '111001111001111', 4: '101101111001001',
-	5: '111100111001111', 6: '111100111101111', 7: '111001010010010', 8: '111101111101111', 9: '111101111001111', '?': '111001011000010',
-};
-
-function pixelText(ctx, text, cx, cy, scale, color, outline) {
-	const s = String(text);
-	const w = s.length * 4 - 1;
-	const x0 = Math.round(cx - (w * scale) / 2);
-	const y0 = Math.round(cy - (5 * scale) / 2);
-	const paint = (dx, dy, c) => {
-		ctx.fillStyle = c;
-		[...s].forEach((ch, i) => {
-			const g = GLYPH[ch] ?? GLYPH['?'];
-			for (let k = 0; k < 15; k++) if (g[k] === '1') ctx.fillRect(x0 + (i * 4 + (k % 3)) * scale + dx, y0 + Math.floor(k / 3) * scale + dy, scale, scale);
-		});
-	};
-	if (outline) for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) paint(dx * scale, dy * scale, outline);
-	paint(0, 0, color);
 }
 
 /* ------------------------------------------------------------------ */
@@ -188,6 +165,31 @@ function drawParticle(ctx, p, k) {
 /*  The stage                                                          */
 /* ------------------------------------------------------------------ */
 
+const INK = '#0d0a14';
+/** The outline for a number: dark, unless the number itself is dark */
+const inkFor = (hex) => {
+	const [r, g, b] = rgb(hex);
+	return 0.299 * r + 0.587 * g + 0.114 * b < 110 ? '#f4f1ea' : INK;
+};
+const easeOutBack = (t) => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+const SIDES = ['right', 'left', 'bottom', 'top'];
+
+/** 4x4 ordered-dither masks, for pixel dice that dissolve instead of fading (no half-transparent pixels) */
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+const DITHER = [];
+function ditherPattern(c, level) {
+	if (!DITHER[level]) {
+		const cv = document.createElement('canvas');
+		cv.width = cv.height = 4;
+		const x = cv.getContext('2d');
+		x.fillStyle = '#000';
+		BAYER.forEach((b, i) => b < level && x.fillRect(i % 4, Math.floor(i / 4), 1, 1));
+		DITHER[level] = cv;
+	}
+	return c.createPattern(DITHER[level], 'repeat');
+}
+
 export class DiceStage {
 	/**
 	 * @param {{canvas?: HTMLCanvasElement, settings?: () => object}} [opts] a canvas of its own (preview), else a
@@ -198,11 +200,16 @@ export class DiceStage {
 		this.canvas = canvas;
 		this.settings = settings;
 		this.dice = [];
+		this.groups = [];
 		this.parts = [];
 		this.rings = [];
 		this.banners = [];
 		this.raf = null;
 		this.last = 0;
+	}
+
+	#radius() {
+		return (this.own ? Math.min(this.W, this.H) * 0.11 : 34) * clamp(Number(this.settings().size) || 1, 0.5, 2);
 	}
 
 	#ensure() {
@@ -214,15 +221,21 @@ export class DiceStage {
 		const W = this.own ? this.canvas.clientWidth || this.canvas.width : window.innerWidth;
 		const H = this.own ? this.canvas.clientHeight || this.canvas.height : window.innerHeight;
 		const dpr = Math.min(2, window.devicePixelRatio || 1);
-		if (this.W !== W || this.H !== H || this.dpr !== dpr) {
-			this.W = W;
-			this.H = H;
+		const resized = this.W !== W || this.H !== H || this.dpr !== dpr;
+		this.W = W;
+		this.H = H;
+		// pixel dice come out about 24 art pixels across
+		const pix = clamp(Math.round((2 * this.#radius()) / 24), 2, 6);
+		if (resized) {
 			this.dpr = dpr;
 			this.canvas.width = Math.round(W * dpr);
 			this.canvas.height = Math.round(H * dpr);
+		}
+		if (resized || pix !== this.pix) {
+			this.pix = pix;
 			this.lo = this.lo ?? document.createElement('canvas');
-			this.lo.width = Math.ceil(W / PIX);
-			this.lo.height = Math.ceil(H / PIX);
+			this.lo.width = Math.ceil(W / pix);
+			this.lo.height = Math.ceil(H / pix);
 		}
 		this.canvas.style.display = '';
 	}
@@ -237,33 +250,59 @@ export class DiceStage {
 		this.#ensure();
 		const look = appearanceOf(appearance);
 		const set = this.settings();
-		const size = clamp(Number(set.size) || 1, 0.5, 2);
-		const r = (this.own ? Math.min(this.W, this.H) * 0.11 : 34) * size;
+		const r = this.#radius();
 		const n = list.length;
-		// thrown in from the lower right (where the chat is), landing around the middle of the lower half
-		const cx = this.W * (this.own ? 0.5 : 0.47);
-		const cy = this.H * (this.own ? 0.56 : 0.6);
+		const { W, H } = this;
+		// landing around the middle of the lower half (on the full screen, a little left of the chat)
+		const cx = W * (this.own ? 0.5 : 0.47);
+		const cy = H * (this.own ? 0.56 : 0.6);
+		const kind = look.throw ?? 'toss';
+		const side = look.from === 'random' ? SIDES[Math.floor(Math.random() * 4)] : SIDES.includes(look.from) ? look.from : 'right';
+		const floorTop = H * (this.own ? 0.15 : 0.3);
 		let resolve;
 		const done = new Promise((res) => (resolve = res));
-		const group = { pending: n, resolve, look, crit, fumble, dice: [] };
+		const total = list.some((d) => d.value == null) ? '?' : String(list.reduce((s, d) => s + d.value, 0));
+		const group = { pending: n, resolve, look, crit, fumble, dice: [], k: 0, total, hold: look.popup && look.popup !== 'none' ? 2.2 : 1.6 };
+		this.groups.push(group);
+		const cols = Math.ceil(Math.sqrt(n));
+		const rows = Math.ceil(n / cols);
 		list.forEach((d, i) => {
-			const tx = cx + (i - (n - 1) / 2) * r * 2.4 + rand(-r * 0.6, r * 0.6);
-			const ty = cy + rand(-r * 0.8, r * 0.8);
-			const sx = this.W + r * 2 + rand(0, r * 2) - (this.own ? this.W * 0.15 : 0);
-			const sy = this.H * (this.own ? 0.85 : 0.9) - i * r * 0.9 + rand(-r * 0.4, r * 0.4);
-			const T = rand(0.55, 0.75);
+			let tx = cx + (i - (n - 1) / 2) * r * 2.4 + rand(-r * 0.6, r * 0.6);
+			let ty = cy + rand(-r * 0.8, r * 0.8);
+			let sx;
+			let sy;
+			let z = r * 0.6;
+			let vz = rand(380, 560);
+			let T = rand(0.55, 0.75);
+			if (kind === 'drop' || kind === 'summon') {
+				tx = cx + ((i % cols) - (cols - 1) / 2) * r * 2.5 + rand(-r * 0.3, r * 0.3);
+				ty = cy + (Math.floor(i / cols) - (rows - 1) / 2) * r * 2.3 + rand(-r * 0.3, r * 0.3);
+				sx = tx;
+				sy = ty;
+				z = kind === 'drop' ? H * 0.7 : 0;
+				vz = 0;
+			} else {
+				const off = (i - (n - 1) / 2) * r * 1.8;
+				if (side === 'right') (sx = W + r * 2 + rand(0, r * 2) - (this.own ? W * 0.15 : 0)), (sy = H * (this.own ? 0.85 : 0.9) - i * r * 0.9 + rand(-r * 0.4, r * 0.4));
+				else if (side === 'left') (sx = -r * 2 - rand(0, r * 2) + (this.own ? W * 0.15 : 0)), (sy = H * (this.own ? 0.85 : 0.9) - i * r * 0.9 + rand(-r * 0.4, r * 0.4));
+				else if (side === 'bottom') (sx = cx + off + rand(-r * 0.4, r * 0.4)), (sy = H + r * 2 - (this.own ? H * 0.15 : 0));
+				else (sx = cx + off + rand(-r * 0.4, r * 0.4)), (sy = floorTop + r), (z = r * 5);
+				if (kind === 'slam') (z = r * 4), (vz = -rand(500, 700)), (T = rand(0.4, 0.5));
+				if (kind === 'roll') (z = 0), (vz = 0), (T = rand(0.45, 0.6));
+			}
+			const still = kind === 'drop' || kind === 'summon';
 			const die = {
 				faces: d.faces,
 				value: d.value,
 				shape: shapeOf(d.faces),
 				x: sx,
 				y: sy,
-				z: r * 0.6,
-				vx: (tx - sx) / T,
-				vy: (ty - sy) / T,
-				vz: rand(380, 560),
+				z,
+				vx: still ? 0 : (tx - sx) / T,
+				vy: still ? 0 : (ty - sy) / T,
+				vz,
 				rot: rand(0, TAU),
-				vr: rand(10, 18) * (Math.random() < 0.5 ? -1 : 1),
+				vr: (kind === 'summon' ? rand(4, 7) : kind === 'roll' ? rand(18, 26) : rand(10, 18)) * (Math.random() < 0.5 ? -1 : 1),
 				tumble: 0,
 				face: this.#randomFace(d.faces),
 				faceAt: 0,
@@ -272,11 +311,16 @@ export class DiceStage {
 				group,
 				settled: false,
 				age: 0,
+				t: 0,
 				settleT: 0,
 				delay: i * 0.06,
+				mul: 1,
+				lift: 0,
+				alpha: 1,
 			};
 			group.dice.push(die);
 			this.dice.push(die);
+			if (kind === 'summon' && !set.reduced) this.rings.push({ x: tx, y: ty + r * 0.55, r, age: 0, life: 0.5, look, kind: 'ring' });
 		});
 		diceSound(look.sound, 'throw', set.volume);
 		this.#start();
@@ -316,6 +360,7 @@ export class DiceStage {
 				d.delay -= dt;
 				continue;
 			}
+			d.t += dt;
 			if (d.settled) {
 				d.settleT += dt;
 				d.rot += (Math.round(d.rot / TAU) * TAU - d.rot) * Math.min(1, dt * 14);
@@ -334,7 +379,7 @@ export class DiceStage {
 				if (Math.abs(d.vz) < 90) d.vz = 0;
 			}
 			const grounded = d.z === 0 && d.vz === 0;
-			const drag = grounded ? 4.6 : 0.25;
+			const drag = grounded ? (d.look.throw === 'roll' ? 2.6 : 4.6) : 0.25;
 			d.vx *= Math.max(0, 1 - drag * dt);
 			d.vy *= Math.max(0, 1 - drag * dt);
 			d.x += d.vx * dt;
@@ -357,7 +402,8 @@ export class DiceStage {
 			}
 			// trail
 			if (!set.reduced && d.look.trail !== 'none' && speed + Math.abs(d.vz) > 120 && Math.random() < dt * 40) this.parts.push(spawn(d.look.trail, d.x + rand(-d.r * 0.4, d.r * 0.4), d.y - d.z + rand(-d.r * 0.4, d.r * 0.4), d.look, -d.vx * 0.1, -d.vy * 0.1));
-			if (grounded && speed < 30 && Math.abs(d.vr) < 2.5) this.#settle(d, set);
+			// slow, and (when summoned) fully there
+			if (grounded && speed < 30 && Math.abs(d.vr) < 2.5 && (d.look.throw !== 'summon' || d.t > 0.35)) this.#settle(d, set);
 		}
 		// dice knock into each other
 		for (let i = 0; i < this.dice.length; i++) {
@@ -385,6 +431,41 @@ export class DiceStage {
 				}
 			}
 		}
+		// how each throw looks as it lands and leaves
+		for (const g of this.groups) {
+			const L = g.look;
+			if (g.pending === 0) g.k += dt;
+			const exitLen = L.exit === 'burst' ? 0.18 : 0.45;
+			const e = g.pending ? 0 : clamp((g.k - g.hold) / exitLen, 0, 1);
+			g.gone = e >= 1;
+			for (const d of g.dice) {
+				let mul = L.throw === 'summon' ? easeOutBack(clamp(d.t / 0.35, 0, 1)) : 1;
+				let lift = 0;
+				let alpha = 1;
+				if (!g.pending) {
+					const k = g.k;
+					if (L.settle === 'pop' && k < 0.3) mul *= 1 + 0.2 * Math.sin((Math.PI * k) / 0.3);
+					if (L.settle === 'hop' && k < 0.4) lift += d.r * 0.7 * Math.sin((Math.PI * k) / 0.4);
+					if (e > 0) {
+						if (L.exit === 'shrink' || L.exit === 'burst') mul *= 1 - e * e;
+						else if (L.exit === 'sink') (lift -= d.r * 1.2 * e), (alpha = 1 - e * e);
+						else if (L.exit === 'float') (lift += d.r * 2.5 * easeOut(e)), (alpha = 1 - e);
+						else alpha = 1 - e;
+						if (L.exit === 'burst' && !d.burst && !set.reduced) {
+							d.burst = true;
+							const kind = L.trail === 'none' ? 'sparkle' : L.trail;
+							for (let i = 0; i < 14; i++) {
+								const a = (i / 14) * TAU;
+								this.parts.push(spawn(kind, d.x, d.y, L, Math.cos(a) * 200, Math.sin(a) * 140 - 40));
+							}
+						}
+					}
+				}
+				d.mul = mul;
+				d.lift = lift;
+				d.alpha = alpha;
+			}
+		}
 		for (const p of this.parts) {
 			p.age += dt;
 			p.x += p.vx * dt;
@@ -397,9 +478,8 @@ export class DiceStage {
 		this.rings = this.rings.filter((g) => g.age < g.life);
 		for (const b of this.banners) b.age += dt;
 		this.banners = this.banners.filter((b) => b.age < b.life);
-		// a settled group stays a moment, then fades
-		const hold = 1.6;
-		this.dice = this.dice.filter((d) => !(d.settled && d.group.pending === 0 && d.settleT > hold + 0.45));
+		this.dice = this.dice.filter((d) => !d.group.gone);
+		this.groups = this.groups.filter((g) => !g.gone);
 		return this.dice.length > 0 || this.parts.length > 0 || this.rings.length > 0 || this.banners.length > 0;
 	}
 
@@ -434,7 +514,7 @@ export class DiceStage {
 		const xs = g.dice.map((d) => d.x);
 		const ys = g.dice.map((d) => d.y);
 		const x = (Math.min(...xs) + Math.max(...xs)) / 2;
-		const y = Math.min(...ys) - g.dice[0].r * 1.9;
+		const y = Math.min(...ys) - g.dice[0].r * (g.look.popup === 'total' ? 2.9 : 1.9);
 		this.banners.push({ text, color, x, y, age: 0, life: 1.9, pixel: g.look.style === 'pixel' });
 		if (set.reduced) return;
 		for (const d of g.dice) {
@@ -449,23 +529,23 @@ export class DiceStage {
 	/* ---------------------------- drawing ----------------------------- */
 
 	#draw() {
-		const { canvas, dpr, W, H } = this;
+		const { canvas, dpr, W, H, pix } = this;
 		const ctx = canvas.getContext('2d');
 		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 		ctx.clearRect(0, 0, W, H);
-		const lo = this.lo.getContext('2d');
+		const lo = this.lo.getContext('2d', { willReadFrequently: true });
 		lo.setTransform(1, 0, 0, 1, 0, 0);
 		lo.clearRect(0, 0, this.lo.width, this.lo.height);
 		let anyPixel = false;
-		const visible = this.dice.filter((d) => d.delay <= 0).sort((a, b) => a.y - b.y);
-		const pick = (look) => (look.style === 'pixel' ? ((anyPixel = true), [lo, 1 / PIX]) : [ctx, 1]);
+		const visible = this.dice.filter((d) => d.delay <= 0 && d.mul > 0.01).sort((a, b) => a.y - b.y);
+		const pick = (look) => (look.style === 'pixel' ? ((anyPixel = true), [lo, 1 / pix]) : [ctx, 1]);
 		for (const g of this.rings) {
 			const [c, k] = pick(g.look);
 			this.#drawRing(c, g, k);
 		}
 		for (const d of visible) {
 			const [c, k] = pick(d.look);
-			this.#drawShadow(c, d, k);
+			if (d.alpha > 0.5) this.#drawShadow(c, d, k);
 		}
 		for (const p of this.parts) {
 			const [c, k] = pick(p.look);
@@ -473,26 +553,111 @@ export class DiceStage {
 		}
 		for (const d of visible) {
 			const [c, k] = pick(d.look);
-			const fade = d.settled && d.group.pending === 0 ? clamp(1 - (d.settleT - 1.6) / 0.45, 0, 1) : 1;
-			c.globalAlpha = fade;
 			if (d.look.style === 'pixel') this.#drawPixelDie(c, d, k);
-			else this.#drawSmoothDie(c, d);
-			c.globalAlpha = 1;
+			else {
+				c.globalAlpha = d.alpha;
+				this.#drawSmoothDie(c, d);
+				c.globalAlpha = 1;
+			}
 		}
 		if (anyPixel) {
-			// hard edges: every art pixel is fully there or not at all
-			const img = lo.getImageData(0, 0, this.lo.width, this.lo.height);
-			const a = img.data;
-			for (let i = 3; i < a.length; i += 4) a[i] = a[i] < 100 ? 0 : 255;
-			lo.putImageData(img, 0, 0);
+			this.#crisp(lo);
+			// leaving: pixel dice dissolve in a dither pattern (outline and all) rather than going see-through
+			for (const d of visible) {
+				if (d.look.style !== 'pixel' || d.alpha >= 1) continue;
+				const k = 1 / pix;
+				const R = d.r * k * d.mul * 1.4;
+				const x = Math.round(d.x * k);
+				const y = Math.round((d.y - d.z - d.lift) * k);
+				lo.save();
+				lo.globalCompositeOperation = 'destination-out';
+				lo.fillStyle = ditherPattern(lo, Math.round((1 - d.alpha) * 16));
+				lo.fillRect(x - R, y - R, R * 2, R * 2.3);
+				lo.restore();
+			}
 			ctx.imageSmoothingEnabled = false;
-			ctx.drawImage(this.lo, 0, 0, this.lo.width * PIX, this.lo.height * PIX);
+			ctx.drawImage(this.lo, 0, 0, this.lo.width * pix, this.lo.height * pix);
+			// numbers on top, upright, on the same pixel grid
+			for (const d of visible) {
+				if (d.look.style !== 'pixel' || d.alpha < 0.5 || d.mul < 0.5) continue;
+				drawPixelTextAt(ctx, String(d.face), d.x, d.y - d.z - d.lift + (d.shape.ty ?? 0) * d.r * d.mul, pix, d.look.number, inkFor(d.look.number), 0, 0);
+			}
 		}
+		this.#drawPopups(ctx);
 		for (const b of this.banners) this.#drawBanner(ctx, b);
 	}
 
+	/**
+	 * Pixel layer clean-up: every art pixel fully there or not at all, a one-pixel dark outline around anything
+	 * solid, and shadows kept as one flat see-through tone.
+	 */
+	#crisp(lo) {
+		const w = this.lo.width;
+		const h = this.lo.height;
+		const img = lo.getImageData(0, 0, w, h);
+		const a = img.data;
+		const solid = new Uint8Array(w * h);
+		for (let i = 0; i < w * h; i++) solid[i] = a[i * 4 + 3] >= 128 ? 1 : 0;
+		const ink = rgb(INK);
+		for (let y = 0; y < h; y++)
+			for (let x = 0; x < w; x++) {
+				const i = y * w + x;
+				const o = i * 4;
+				if (solid[i]) {
+					a[o + 3] = 255;
+					continue;
+				}
+				if ((x > 0 && solid[i - 1]) || (x < w - 1 && solid[i + 1]) || (y > 0 && solid[i - w]) || (y < h - 1 && solid[i + w])) {
+					a[o] = ink[0];
+					a[o + 1] = ink[1];
+					a[o + 2] = ink[2];
+					a[o + 3] = 255;
+				} else if (a[o + 3] >= 40 && Math.max(a[o], a[o + 1], a[o + 2]) < 40) {
+					a[o] = a[o + 1] = a[o + 2] = 0;
+					a[o + 3] = 90;
+				} else a[o + 3] = 0;
+			}
+		lo.putImageData(img, 0, 0);
+	}
+
+	#drawPopups(ctx) {
+		for (const g of this.groups) {
+			const L = g.look;
+			if (g.pending || !L.popup || L.popup === 'none') continue;
+			const rise = easeOut(clamp(g.k / 0.5, 0, 1));
+			const alpha = Math.min(...g.dice.map((d) => d.alpha));
+			if (alpha <= 0.02) continue;
+			ctx.globalAlpha = alpha;
+			if (L.popup === 'each') for (const d of g.dice) this.#popup(ctx, String(d.value ?? '?'), d.x, d.y - d.z - d.lift - d.r * 1.45 - rise * 14, L, d.r, 1, rise);
+			else {
+				const xs = g.dice.map((d) => d.x);
+				const x = (Math.min(...xs) + Math.max(...xs)) / 2;
+				const y = Math.min(...g.dice.map((d) => d.y - d.lift)) - g.dice[0].r * 1.6 - rise * 20;
+				this.#popup(ctx, g.total, x, y, L, g.dice[0].r, 2, rise);
+			}
+			ctx.globalAlpha = 1;
+		}
+	}
+
+	#popup(c, text, x, y, L, r, big, rise) {
+		if (L.style === 'pixel') return drawPixelTextAt(c, text, x, y, this.pix * big, L.number, inkFor(L.number), 0, 0);
+		const size = Math.round((big > 1 ? 1.1 : 0.7) * r * (0.8 + 0.2 * easeOutBack(rise)));
+		c.font = `700 ${size}px "FUD Antonio", "Antonio", "Arial Narrow", sans-serif`;
+		c.textAlign = 'center';
+		c.textBaseline = 'middle';
+		c.lineJoin = 'round';
+		c.lineWidth = Math.max(3, size * 0.16);
+		c.strokeStyle = inkFor(L.number) === INK ? 'rgba(5,8,18,0.9)' : 'rgba(244,241,234,0.95)';
+		c.shadowColor = L.glow;
+		c.shadowBlur = size * 0.4;
+		c.strokeText(text, x, y);
+		c.shadowBlur = 0;
+		c.fillStyle = L.number;
+		c.fillText(text, x, y);
+	}
+
 	#drawShadow(c, d, k) {
-		const s = 1 - Math.min(0.6, d.z / (d.r * 6));
+		const s = (1 - Math.min(0.6, d.z / (d.r * 6))) * d.mul;
 		c.fillStyle = 'rgba(0,0,0,0.35)';
 		c.beginPath();
 		c.ellipse(d.x * k, (d.y + d.r * 0.85) * k, d.r * 0.95 * s * k, d.r * 0.32 * s * k, 0, 0, TAU);
@@ -531,38 +696,58 @@ export class DiceStage {
 		return squash;
 	}
 
+	/** The die's surface as a fill, sized to the die */
+	#surfaceFill(c, L, R, pixel) {
+		const size = pixel ? 32 : 128;
+		const pat = c.createPattern(surface(L, { size, pixel, seed: 5 }), 'repeat');
+		// pixel dice: one texel per art pixel; smooth: the texture spans the die
+		const s = pixel ? 1 : (R * 2.2) / size;
+		pat.setTransform(new DOMMatrix().translate(-size * s * 0.5, -size * s * 0.5).scale(s));
+		return pat;
+	}
+
 	#drawSmoothDie(c, d) {
 		const L = d.look;
-		const R = d.r;
+		const R = d.r * d.mul;
 		const x = d.x;
-		const y = d.y - d.z;
-		const glowing = d.settled && d.group.pending === 0;
+		const y = d.y - d.z - d.lift;
+		const glowing = d.settled && d.group.pending === 0 && L.settle === 'glow' && d.group.k < 1.4;
 		this.#path(c, d, x, y, R);
 		if (glowing || L.material === 'glass') {
 			c.shadowColor = L.glow;
-			c.shadowBlur = glowing ? 22 : 10;
+			c.shadowBlur = glowing ? 26 * Math.sin(Math.PI * Math.min(1, d.group.k / 1.4)) + 8 : 10;
 		}
-		let fill;
-		if (L.material === 'gem') {
-			fill = c.createRadialGradient(-R * 0.35, -R * 0.4, R * 0.1, 0, 0, R * 1.2);
-			fill.addColorStop(0, mix(L.body, '#ffffff', 0.5));
-			fill.addColorStop(0.45, L.body);
-			fill.addColorStop(1, mix(L.body, '#000000', 0.55));
-		} else if (L.material === 'metal') {
-			fill = c.createLinearGradient(-R, -R, R, R);
-			fill.addColorStop(0, mix(L.body, '#ffffff', 0.55));
-			fill.addColorStop(0.35, L.body);
-			fill.addColorStop(0.55, mix(L.body, '#ffffff', 0.25));
-			fill.addColorStop(1, mix(L.body, '#000000', 0.5));
-		} else if (L.material === 'glass') {
-			fill = c.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.1);
-			fill.addColorStop(0, rgba(L.glow, 0.55));
-			fill.addColorStop(0.6, rgba(L.body, 0.6));
-			fill.addColorStop(1, rgba(L.body, 0.85));
-		} else fill = L.body;
-		c.fillStyle = fill;
+		const a0 = c.globalAlpha;
+		if (L.material === 'glass') c.globalAlpha = a0 * 0.82;
+		c.fillStyle = this.#surfaceFill(c, L, R, false);
 		c.fill();
+		c.globalAlpha = a0;
 		c.shadowBlur = 0;
+		// light and shade over the surface, by material
+		let shade;
+		if (L.material === 'gem') {
+			shade = c.createRadialGradient(-R * 0.35, -R * 0.4, R * 0.1, 0, 0, R * 1.2);
+			shade.addColorStop(0, 'rgba(255,255,255,0.45)');
+			shade.addColorStop(0.45, 'rgba(255,255,255,0)');
+			shade.addColorStop(1, 'rgba(0,0,0,0.5)');
+		} else if (L.material === 'metal') {
+			shade = c.createLinearGradient(-R, -R, R, R);
+			shade.addColorStop(0, 'rgba(255,255,255,0.45)');
+			shade.addColorStop(0.35, 'rgba(255,255,255,0)');
+			shade.addColorStop(0.55, 'rgba(255,255,255,0.2)');
+			shade.addColorStop(1, 'rgba(0,0,0,0.5)');
+		} else if (L.material === 'glass') {
+			shade = c.createRadialGradient(0, 0, R * 0.1, 0, 0, R * 1.1);
+			shade.addColorStop(0, rgba(L.glow, 0.45));
+			shade.addColorStop(0.6, rgba(L.glow, 0));
+			shade.addColorStop(1, 'rgba(0,0,0,0.25)');
+		} else {
+			shade = c.createLinearGradient(0, -R, 0, R);
+			shade.addColorStop(0, 'rgba(255,255,255,0.1)');
+			shade.addColorStop(1, 'rgba(0,0,0,0.3)');
+		}
+		c.fillStyle = shade;
+		c.fill();
 		// facets and rim
 		c.strokeStyle = rgba(L.edge, 0.45);
 		c.lineWidth = 1.2;
@@ -584,48 +769,49 @@ export class DiceStage {
 		c.ellipse(-R * 0.38, -R * 0.45, R * 0.22, R * 0.1, -0.6, 0, TAU);
 		c.fill();
 		c.restore();
+		if (d.mul < 0.5) return;
 		// the number stays upright
 		const fs = Math.round(R * d.shape.text * 1.15);
 		c.font = `700 ${fs}px "FUD Antonio", "Antonio", "Arial Narrow", sans-serif`;
 		c.textAlign = 'center';
 		c.textBaseline = 'middle';
 		c.lineWidth = Math.max(2, fs * 0.14);
-		c.strokeStyle = mix(L.body, '#000000', 0.7);
+		c.lineJoin = 'round';
+		c.strokeStyle = inkFor(L.number) === INK ? mix(L.body, '#000000', 0.7) : 'rgba(244,241,234,0.95)';
 		const ty = y + (d.shape.ty ?? 0) * R;
 		c.strokeText(String(d.face), x, ty);
 		c.fillStyle = L.number;
 		c.fillText(String(d.face), x, ty);
 	}
 
+	/** Drawn on the low-resolution layer: the textured body, two light bands, a highlight and a rim */
 	#drawPixelDie(c, d, k) {
 		const L = d.look;
-		const R = d.r * k;
-		const x = d.x * k;
-		const y = (d.y - d.z) * k;
+		const R = d.r * k * d.mul;
+		const x = Math.round(d.x * k);
+		const y = Math.round((d.y - d.z - d.lift) * k);
 		this.#path(c, d, x, y, R);
-		c.fillStyle = L.body;
+		c.fillStyle = this.#surfaceFill(c, L, R, true);
 		c.fill();
-		// two-tone shading: the lower right half darker
 		c.save();
 		c.clip();
-		c.fillStyle = mix(L.body, '#000000', 0.35);
+		// the lower right in shadow
+		c.fillStyle = 'rgba(0,0,0,0.32)';
 		c.beginPath();
 		c.moveTo(-R * 2, R * 0.4);
 		c.lineTo(R * 2, -R * 0.6);
 		c.lineTo(R * 2, R * 2);
 		c.lineTo(-R * 2, R * 2);
 		c.fill();
-		c.fillStyle = mix(L.body, '#ffffff', 0.45);
-		c.fillRect(-R * 0.55, -R * 0.6, Math.max(1, R * 0.22), Math.max(1, R * 0.12));
+		c.fillStyle = 'rgba(255,255,255,0.55)';
+		c.fillRect(Math.round(-R * 0.55), Math.round(-R * 0.6), Math.max(1, Math.round(R * 0.22)), 1);
 		c.restore();
 		c.restore();
 		this.#path(c, d, x, y, R);
 		c.strokeStyle = L.edge;
-		c.lineWidth = 1.2;
+		c.lineWidth = 1;
 		c.stroke();
 		c.restore();
-		const scale = Math.max(1, Math.floor(R / 9));
-		pixelText(c, d.face, x, y + (d.shape.ty ?? 0) * R, scale, L.number, mix(L.body, '#000000', 0.65));
 	}
 
 	#drawBanner(c, b) {
@@ -651,7 +837,9 @@ export class DiceStage {
 
 	/** Clear everything at once (scene change, setting off) */
 	clear() {
+		for (const g of this.groups) g.resolve?.();
 		this.dice = [];
+		this.groups = [];
 		this.parts = [];
 		this.rings = [];
 		this.banners = [];

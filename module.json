@@ -1,8 +1,8 @@
 {
   "id": "fu-dice",
   "title": "Fabula Ultima Dice",
-  "description": "JRPG dice for every roll: real 3D dice (pixel-art or smooth) thrown across the screen with physics, landing on the actual result, with trails, landing effects and synthesized sounds. Each player picks their own look from presets (Battle UI, 8-bit, and one for each Final Fantasy era from VI to XVI) or makes their own, with a live preview. Chat results wait until the dice land, Project FU criticals and fumbles get a flourish, and lighter 2D dice are there for older computers.",
-  "version": "1.0.0",
+  "description": "JRPG dice for every roll: real 3D dice (pixel-art or smooth) thrown across the screen with physics, landing on the actual result. Each player picks a preset (Battle UI, 8-bit, and one for every Final Fantasy from VI to XVI) or builds their own: 13 surface textures, colors, trails, landing effects, sounds, and how the dice are thrown, land and leave, with pop-up numbers and a live preview. Pixel dice are crisp and readable, chat results wait until the dice land, Project FU criticals and fumbles get a flourish, and lighter 2D dice are there for older computers.",
+  "version": "1.1.0",
   "authors": [
     {
       "name": "George Sowidan"
@@ -20,6 +20,6 @@
   ],
   "url": "https://github.com/EclipseGS27/fu-dice",
   "manifest": "https://github.com/EclipseGS27/fu-dice/releases/latest/download/module.json",
-  "download": "https://github.com/EclipseGS27/fu-dice/releases/download/v1.0.0/fu-dice.zip",
+  "download": "https://github.com/EclipseGS27/fu-dice/releases/download/v1.1.0/fu-dice.zip",
   "bugs": "https://github.com/EclipseGS27/fu-dice/issues"
 }
